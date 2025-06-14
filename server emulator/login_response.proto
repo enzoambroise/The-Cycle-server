@@ -1,0 +1,17 @@
+syntax = "proto2"; // Changez la syntaxe à proto2
+
+enum LoginResponse_Result {
+  OK = 0; // Vous pouvez revenir à 0 si vous le souhaitez en proto2
+  INVALID_TOKEN = 1;
+  ALREADY_CONNECTED = 2;
+  INVALID_VERSION = 3;
+}
+
+message LoginResponse {
+  required LoginResponse_Result result = 1; // Un champ essentiel devrait être 'required'
+  optional string session_id = 2;          // Les champs optionnels peuvent être omis
+  optional string username = 3;
+  optional string user_id = 4;
+  // Si vous ajoutez RegionEndpoints plus tard, il sera probablement 'optional'
+  // optional RegionEndpoints server_endpoints = 5;
+}
