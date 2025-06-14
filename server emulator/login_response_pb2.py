@@ -22,17 +22,18 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from google.protobuf import any_pb2 as google_dot_protobuf_dot_any__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14login_response.proto\"m\n\rLoginResponse\x12%\n\x06result\x18\x01 \x02(\x0e\x32\x15.LoginResponse_Result\x12\x12\n\nsession_id\x18\x02 \x01(\t\x12\x10\n\x08username\x18\x03 \x01(\t\x12\x0f\n\x07user_id\x18\x04 \x01(\t*]\n\x14LoginResponse_Result\x12\x06\n\x02OK\x10\x00\x12\x11\n\rINVALID_TOKEN\x10\x01\x12\x15\n\x11\x41LREADY_CONNECTED\x10\x02\x12\x13\n\x0fINVALID_VERSION\x10\x03')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14login_response.proto\x1a\x19google/protobuf/any.proto\"\x80\x01\n\rLoginResponse\x12%\n\x06result\x18\x01 \x01(\x0e\x32\x15.LoginResponse_Result\x12\x11\n\tjwt_token\x18\x02 \x01(\t\x12\x12\n\nsession_id\x18\x03 \x01(\t\x12\x10\n\x08username\x18\x04 \x01(\t\x12\x0f\n\x07user_id\x18\x05 \x01(\t*~\n\x14LoginResponse_Result\x12\x0b\n\x07UNKNOWN\x10\x00\x12\x06\n\x02OK\x10\x01\x12\x17\n\x13INVALID_CREDENTIALS\x10\x02\x12\x14\n\x10\x41\x43\x43OUNT_DISABLED\x10\x03\x12\x10\n\x0cRATE_LIMITED\x10\x04\x12\x10\n\x0cSERVER_ERROR\x10\x05\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'login_response_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_LOGINRESPONSE_RESULT']._serialized_start=135
-  _globals['_LOGINRESPONSE_RESULT']._serialized_end=228
-  _globals['_LOGINRESPONSE']._serialized_start=24
-  _globals['_LOGINRESPONSE']._serialized_end=133
+  _globals['_LOGINRESPONSE_RESULT']._serialized_start=182
+  _globals['_LOGINRESPONSE_RESULT']._serialized_end=308
+  _globals['_LOGINRESPONSE']._serialized_start=52
+  _globals['_LOGINRESPONSE']._serialized_end=180
 # @@protoc_insertion_point(module_scope)
