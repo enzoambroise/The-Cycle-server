@@ -2,19 +2,73 @@ syntax = "proto3";
 
 import "google/protobuf/any.proto";
 
-enum LoginResponse_Result {
-  UNKNOWN = 0;
-  OK = 1;
-  INVALID_CREDENTIALS = 2;
-  ACCOUNT_DISABLED = 3;
-  RATE_LIMITED = 4;
-  SERVER_ERROR = 5;
+// =================================================================
+// 1. MESSAGES D'ENVELOPPE (Déduit des logs et de GatewayRequest::set_requestid)
+// =================================================================
+
+// Enveloppe de la requête (contient LoginRequest ou NDARequest dans le payload)
+message GatewayRequest {
+    string request_id = 1; // Confirme par la décompilation
+    google.protobuf.Any payload = 2; 
+    int64 client_timestamp_ms = 3; 
 }
 
+// Enveloppe de la réponse (toutes les réponses du service Gateway)
+message GatewayResponse {
+    string request_id = 1;
+    google.protobuf.Any payload = 2; 
+    int32 status_code = 3; 
+    string error_message = 4;
+}
+
+// =================================================================
+// 2. SERVICES
+// =================================================================
+
+service GatewayService {
+    // Même si le client envoie une GatewayRequest, l'appel Login est le plus courant
+    rpc Login(LoginRequest) returns (LoginResponse); 
+}
+
+service NDAService {
+    rpc CheckNDA(NDARequest) returns (NDAResponse);
+}
+
+// =================================================================
+// 3. MESSAGES INTERNES
+// =================================================================
+
+// Message de Requête Login
+message LoginRequest {
+    string jwt_token = 1;
+    string region = 2;
+    string client_version = 3;
+}
+
+// Message de Réponse Login (que notre mock doit retourner)
 message LoginResponse {
-  LoginResponse_Result result = 1;
-  string jwt_token = 2;
-  string session_id = 3;
-  string username = 4;
-  string user_id = 5;
+    enum Result {
+        OK = 0;
+        INVALID_TOKEN = 1;
+        // ...
+    }
+    Result result = 1;
+    string session_id = 2;
+    string username = 3;
+    string user_id = 4;
+}
+
+// Message de Requête NDA (Le message de 114 octets reçu)
+message NDARequest {
+    string token = 1;
+}
+
+// Message de Réponse NDA (Le message nu de 7 octets que le client accepte)
+message NDAResponse {
+    bool nda = 1; 
+}
+
+// Message PONG (pour le signal de déblocage/Keep-Alive)
+message Pong {
+    int64 server_time_ms = 1; // FIX CRITIQUE: Doit être int64 pour le temps en ms
 }

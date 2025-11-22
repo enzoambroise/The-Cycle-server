@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package room;
+
+// Informations de base sur un joueur dans un salon
+message RoomPlayer {
+  string player_id = 1;
+  string username = 2;
+  int32 team_id = 3;
+}
+
+// Informations sur une escouade dans un salon
+message RoomSquad {
+  string squad_id = 1;
+  repeated RoomPlayer members = 2;
+}
+
+// Informations de base sur un salon
+message RoomInfo {
+  string room_id = 1;
+  string map_name = 2;
+  int32 max_players = 3;
+  repeated RoomPlayer players = 4;
+  repeated RoomSquad squads = 5;
+}
+
+// Requête de connexion à un salon
+message Connect {
+  string ip = 1;
+  string room_id = 2;
+}
+
+// Réponse à une connexion à un salon
+message ConnectResponse {
+  bool success = 1;
+  string room_session_id = 2;
+  RoomInfo info = 3;
+}
+
+// Réinitialisation de tous les salons en attente
+message ResetAllWaitingRooms {
+  bool reset_done = 1;
+}

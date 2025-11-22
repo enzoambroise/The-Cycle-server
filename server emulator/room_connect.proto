@@ -1,0 +1,8 @@
+syntax = "proto3"; // C'est la syntaxe la plus courante. Si ça ne marche pas, essayez "proto2";
+
+package room; // Basé sur room::Connect, cela indique un package
+
+message Connect {
+  string addr = 1;
+  string roomId = 2;
+}

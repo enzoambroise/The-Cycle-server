@@ -1,181 +1,180 @@
-import socket
 import ssl
+import socket
+import threading
 import logging
-import json
-from google.protobuf.any_pb2 import Any
-from login_response_pb2 import LoginResponse, LoginResponse_Result
+import struct
+import time 
+import sys
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Vérifiez que ce chemin est correct
+try:
+    import login_response_pb2 
+    from google.protobuf.any_pb2 import Any 
+except ImportError:
+    print("ERREUR: Impossible d'importer login_response_pb2. Avez-vous compilé le .proto ?")
+    sys.exit(1)
 
-PORT = 50051
-HOST = "127.0.0.1"
+# ---------------- CONFIGURATION ----------------
+LOG = logging.getLogger("TLS-MOCK")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s:%(levelname)s:%(message)s")
 
-CERT_FILE = 'server.crt'
-KEY_FILE = 'server.key'
+CERT_FILE = "server.crt" 
+KEY_FILE = "server.key"
+LISTEN_HOST = "0.0.0.0" 
+LISTEN_PORT = 50051
+# -----------------------------------------------
 
-PROTOCOL_HEADER_LENGTH = 4 
+def gRPC_frame(payload):
+    """Encapsule les données Protobuf avec le framing gRPC."""
+    return b"\x00" + struct.pack(">I", len(payload)) + payload
 
-def handle_protobuf_message(data):
-    decoded_info = {"message_type": "Inconnu", "details": "Impossible de décoder"}
-    
-    protobuf_payload = data[PROTOCOL_HEADER_LENGTH:]
+# ---------------- Fonctions de Réponse Protobuf ----------------
 
-    any_message = Any()
+def build_nda_response_7_bytes():
+    """
+    Construit la réponse NDA en format Protobuf NDAResponse seul.
+    Taille finale: ~7 bytes.
+    """
     try:
-        any_message.ParseFromString(protobuf_payload)
-        logging.info(f"DEBUG: Any message type_url reçu : '{any_message.type_url}'")
-        decoded_info["message_type"] = any_message.type_url
+        # FIX: Utilise NDAResponse
+        nda_response = login_response_pb2.NDAResponse() 
+        nda_response.nda = True 
+        
+        payload = nda_response.SerializeToString()
+        return gRPC_frame(payload)
+    except AttributeError:
+        LOG.error("Erreur: Le message NDAResponse ou le champ 'nda' n'est pas défini. Avez-vous compilé le .proto ?")
+        return b''
 
-        if any_message.type_url == "type.googleapis.com/LoginRequest":
-            logging.info(f"DEBUG: Message de type 'LoginRequest' identifié.")
-            decoded_info["details"] = "Message LoginRequest reçu. Contenu décodé ci-dessous si disponible."
-            
-            try:
-                jwt_start_marker = b"your_simulated_jwt_token"
-                jwt_start_index = protobuf_payload.find(jwt_start_marker)
-                if jwt_start_index != -1:
-                    decoded_info["JWT Token"] = protobuf_payload[jwt_start_index : jwt_start_index + len(jwt_start_marker) + 30].decode('utf-8', errors='ignore') + "..."
+def build_pong_response_11_bytes():
+    """
+    Construit le message Pong (11 bytes). Utilisé pour débloquer le client après la NDA.
+    """
+    try:
+        pong = login_response_pb2.Pong()
+        # FIX: Utilisera int64 si le .proto a été mis à jour
+        pong.server_time_ms = int(time.time() * 1000) 
+        
+        payload = pong.SerializeToString()
+        return gRPC_frame(payload)
+    except AttributeError:
+        LOG.error("Erreur: Le message Pong n'est pas défini (ou problème int64).")
+        return b''
 
-                client_version_marker = b"PROSPECT/Releases/"
-                version_start_index = protobuf_payload.find(client_version_marker)
-                if version_start_index != -1:
-                    version_full_start = protobuf_payload.rfind(b'\x12', 0, version_start_index)
-                    if version_full_start == -1: # Fallback if rfind doesn't work for some reason
-                        version_full_start = 0
-                    version_end_index = protobuf_payload.find(b'\x00', version_full_start)
-                    if version_end_index == -1:
-                        version_end_index = len(protobuf_payload)
-                    decoded_info["Client Version"] = protobuf_payload[version_full_start + 2 : version_end_index].decode('utf-8', errors='ignore').strip()
-            except Exception as e:
-                logging.warning(f"Impossible d'extraire les détails du LoginRequest des octets bruts : {e}")
-        else:
-            # Pour les autres types de messages, nous loggons la valeur brute pour l'analyse
-            logging.info(f"DEBUG: Contenu brut du message (Any.value) pour {any_message.type_url}: {any_message.value.hex()}")
-
-
-    except Exception as e:
-        logging.error(f"Erreur lors du décodage du message Any ou Protobuf : {e}")
-        logging.error(f"Payload Protobuf brut : {protobuf_payload.hex()}")
+def build_login_response_ok():
+    """
+    Construit une LoginResponse complète et valide (OK).
+    Taille finale: ~92 bytes.
+    """
+    resp = login_response_pb2.LoginResponse() 
     
-    return decoded_info
+    resp.result = login_response_pb2.LoginResponse.Result.OK 
+    resp.session_id = "VALID_TOKEN_A7B4C8D2E1F0G3H6I9J4K7L0M3N6P9Q2R5S8T1U4V7W0X3Y6Z9" 
+    resp.username = "Enzo_Authorized_User"
+    resp.user_id = "user_4567"
+    
+    payload = resp.SerializeToString()
+    return gRPC_frame(payload)
 
-def create_login_response(session_id, username_val, user_id):
-    """
-    Crée un message LoginResponse simulé et l'enveloppe dans un google.protobuf.Any.
-    """
-    response = LoginResponse(
-        result=LoginResponse_Result.OK,
-        session_id=session_id,
-        username=username_val,
-        user_id=user_id,
-    )
+# ---------------- Gestion de la Connexion Client ----------------
 
-    simulated_jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxrwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
-    response.jwt_token = simulated_jwt_token
-
-    any_response = Any()
-    any_response.Pack(response)
-    return any_response
-
-def handle_client(connstream):
-    logging.info("Gestion d'une nouvelle connexion client SSL...")
+def handle_client(connstream, addr):
+    """Gère la connexion client : NDA (7b) + PONG (11b) → LoginRequest (Any) → LoginResponse (92b)."""
+    LOG.info(f"[{addr}] Connexion TLS établie")
+    
+    nda_sent = False
+    nda_completed = False
+    
     try:
         while True:
-            # First, try to receive the header
-            header_bytes = connstream.recv(PROTOCOL_HEADER_LENGTH)
-            if not header_bytes:
-                logging.info("Client déconnecté (en-tête vide).")
-                break # Client closed the connection
-
-            if len(header_bytes) < PROTOCOL_HEADER_LENGTH:
-                logging.warning(f"En-tête incomplet reçu ({len(header_bytes)} octets). Fermeture de la connexion.")
-                break # Incomplete header, close connection
-
-            # Then, receive the rest of the data
-            data = connstream.recv(4096) # Read up to 4096 bytes of the payload
+            # Lecture bloquante pour maintenir la connexion ouverte
+            data = connstream.recv(8192) 
+            
             if not data:
-                logging.info("Client déconnecté (aucune donnée reçue après l'en-tête).")
-                break # Client closed connection after header
-
-            full_message_data = header_bytes + data
-            
-            logging.info(f"Données brutes reçues (y compris l'en-tête {header_bytes.hex()}) ({len(full_message_data)} octets): {full_message_data.hex()}")
-
-            decoded_request_info = handle_protobuf_message(full_message_data)
-            logging.info("Requête Protobuf décodée :")
-            for key, value in decoded_request_info.items():
-                logging.info(f"    {key}: {value}")
-
-            if decoded_request_info.get("message_type") == "type.googleapis.com/LoginRequest":
-                session_id = "some_generated_session_id_123"
-                username_val = "Player123"
-                user_id = "user_abc_456"
-                any_response = create_login_response(session_id, username_val, user_id)
-                serialized_response = any_response.SerializeToString()
+                LOG.info(f"[{addr}] Le client a fermé la connexion (FIN DE SESSION).")
+                break
                 
-                response_with_header = b'\x91\x00\x00\x00' + serialized_response
+            LOG.info(f"[{addr}] Reçu {len(data)} bytes")
+            
+            # --- Étape 1: Répondre à la NDA (Requête NDA / 114 bytes) ---
+            if b"/nda" in data or b"NDA" in data.upper():
+                if not nda_sent:
+                    
+                    # 1a. Envoi de la NDA nue (7 bytes)
+                    resp_nda = build_nda_response_7_bytes()
+                    connstream.sendall(resp_nda)
+                    LOG.info(f"[{addr}] NDA Response (nu) envoyée ({len(resp_nda)} bytes).")
+                    
+                    # 1b. Envoi du Pong (11 bytes) pour débloquer le client (Keep-Alive)
+                    resp_pong = build_pong_response_11_bytes() 
+                    connstream.sendall(resp_pong)
+                    LOG.info(f"[{addr}] Pong (11 bytes) envoyé pour débloquer LoginRequest.")
+                    
+                    nda_sent = True
+                    nda_completed = True
+                else:
+                    LOG.info(f"[{addr}] NDARequest détectée de nouveau, ignorée.")
+            
+            # --- Étape 2: Répondre au Login (Le client envoie Any<LoginRequest>) ---
+            # La détection par le nom du type Protobuf est la plus fiable.
+            elif b"type.googleapis.com/LoginRequest" in data:
+                if nda_completed:
+                    LOG.info(f"[{addr}] LoginRequest encapsulée détectée → envoi LoginResponse OK.")
+                    
+                    resp = build_login_response_ok() 
+                    connstream.sendall(resp)
+                    LOG.info(f"[{addr}] LoginResponse envoyée ({len(resp)} bytes). SUCCÈS ! LA CONNEXION EST TERMINÉE.")
+                    
+                    # Succès, on peut fermer la connexion
+                    break 
 
-                logging.info(f"Message Protobuf sérialisé (Any(LoginResponse)) ({len(serialized_response)} octets): {serialized_response.hex()}")
-                logging.info(f"Réponse complète à envoyer ({len(response_with_header)} octets): {response_with_header.hex()}")
-                connstream.sendall(response_with_header)
-                logging.info("Réponse de login Protobuf envoyée.")
-                # Nous ne mettons PAS de 'break' ici. La boucle continue d'écouter les messages suivants.
             else:
-                logging.warning(f"Type de message Protobuf non géré : {decoded_request_info.get('message_type')}. Aucune réponse automatique envoyée.")
-                # Nous ne mettons PAS de 'break' ici. La boucle continue d'écouter les messages suivants.
+                 LOG.info(f"[{addr}] Requête inconnue de {len(data)} bytes (Premiers 50: {data[:50]}), ignorée.")
 
-    except ssl.SSLError as e:
-        logging.error(f"Erreur SSL lors de la communication client : {e}")
-    except socket.error as e:
-        logging.error(f"Erreur de socket lors de la communication client : {e}")
     except Exception as e:
-        logging.error(f"Erreur inattendue lors de la gestion du client : {e}")
+        LOG.error(f"[{addr}] Erreur inattendue: {e}")
     finally:
-        logging.info("Connexion SSL fermée.")
+        try:
+            connstream.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
         connstream.close()
+        LOG.info(f"[{addr}] Connexion fermée")
 
-def run_server():
+def start_tls_server():
+    """Initialise et lance le serveur TLS."""
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
-    context.options |= ssl.OP_NO_TLSv1_3
+    try:
+        context.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
+    except FileNotFoundError:
+        LOG.error(f"ERREUR: Les fichiers TLS ({CERT_FILE} et {KEY_FILE}) sont introuvables. Créez-les avec OpenSSL.")
+        return
 
-    bindsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    bindsocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    bindsocket.bind((HOST, PORT))
-    bindsocket.listen(5)
-
-    logging.info(f"Serveur TCP/SSL Backend démarré sur {HOST}:{PORT}")
-    logging.info(f"Certificat : {CERT_FILE}, Clé : {KEY_FILE}")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind((LISTEN_HOST, LISTEN_PORT))
+    except OSError as e:
+        LOG.error(f"ERREUR lors du bind sur {LISTEN_HOST}:{LISTEN_PORT}. Le port est-il déjà utilisé ?")
+        return
+        
+    sock.listen(8)
+    LOG.info(f"[TLS-MOCK] Serveur TLS à l'écoute sur {LISTEN_HOST}:{LISTEN_PORT}")
 
     try:
         while True:
-            newsocket, fromaddr = bindsocket.accept()
-            logging.info(f"Nouvelle connexion TCP entrante de : {fromaddr}")
+            newsock, addr = sock.accept()
             try:
-                connstream = context.wrap_socket(newsocket, server_side=True)
-                handle_client(connstream)
-            except ssl.SSLError as e:
-                logging.error(f"Erreur SSL lors du handshake client (probablement un problème de certificat ou de version TLS) : {e}")
-                newsocket.close()
-            except Exception as e:
-                logging.error(f"Erreur lors de l'établissement de la connexion SSL : {e}")
-                newsocket.close()
+                connstream = context.wrap_socket(newsock, server_side=True)
+                t = threading.Thread(target=handle_client, args=(connstream, addr), daemon=True)
+                t.start()
+            except ssl.SSLError as se:
+                LOG.error(f"[{addr}] Échec de la poignée de main TLS: {se}")
+                newsock.close()
     except KeyboardInterrupt:
-        logging.info("\nServeur TCP/SSL Backend arrêté.")
-    except FileNotFoundError:
-        logging.error(f"Erreur : Le certificat '{CERT_FILE}' ou la clé '{KEY_FILE}' est introuvable.")
-        logging.error("Assurez-vous qu'ils sont dans le même répertoire que le script ou que les chemins sont corrects.")
-        logging.error("Générez-les avec OpenSSL (voir instructions précédentes).")
-        return
-    except ssl.SSLError as e:
-        logging.error(f"Erreur SSL lors du chargement du certificat : {e}")
-        logging.error("Vérifiez la validité de votre certificat et de votre clé (phrase secrète si vous en avez mis une).")
-        return
-    except Exception as e:
-        logging.error(f"Une erreur inattendue dans le serveur principal : {e}")
+        LOG.info("Arrêt serveur TLS demandé")
     finally:
-        bindsocket.close()
+        sock.close()
 
 if __name__ == "__main__":
-    run_server()
+    start_tls_server()
