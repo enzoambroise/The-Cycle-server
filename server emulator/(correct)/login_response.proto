@@ -2,6 +2,10 @@ syntax = "proto3";
 
 import "google/protobuf/any.proto"; 
 
+// ===========================================
+// Services et Requêtes
+// ===========================================
+
 service GatewayService {
   rpc Login(LoginRequest) returns (LoginResponse);
 }
@@ -12,27 +16,38 @@ message LoginRequest {
   string client_version = 3;
 }
 
+// ===========================================
+// Message de Réponse Critique
+// ===========================================
+
 message LoginResponse {
   enum Result {
     OK = 0;
     INVALID_TOKEN = 1;
-    // ...
+    ALREADY_CONNECTED = 2; 
+    INVALID_VERSION = 3;
   }
 
   Result result = 1;
-  string session_id = 2;
+  string session_id = 2; 
   string username = 3;
   string user_id = 4;
-  // Assurez-vous que l'accolade suivante est bien présente !
-} // <-- CRITIQUE : L'accolade fermante du message LoginResponse
+  
+  // NOUVEAU CHAMP: Flag d'initialisation (très souvent un booléen au Tag 5)
+  bool is_initialized = 5;
+  
+  // 🔑 CHAMP CRITIQUE: Gros paquet P7 au Tag 6, type bytes (simple).
+  bytes large_init_packet = 6;
+}
 
-// MESSAGE NDA (Votre dernière correction, doit être en top-level)
+// ===========================================
+// Autres Messages
+// ===========================================
+
 message NDAStatus {
     bool nda = 1; 
 }
 
-// MESSAGE PONG (Message d'initialisation)
 message Pong {
     int32 server_time_ms = 1;
 }
-// Assurez-vous qu'il n'y ait pas d'accolades orphelines ici.

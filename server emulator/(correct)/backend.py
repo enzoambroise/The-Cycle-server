@@ -2,13 +2,15 @@ import ssl
 import socket
 import threading
 import logging
-import json
 import struct
 import sys
-import time 
+from google.protobuf.any_pb2 import Any 
 
-import login_response_pb2 
-from google.protobuf.any_pb2 import Any # <-- NOUVEL IMPORT CRITIQUE
+try:
+    import login_response_pb2 
+except ImportError:
+    print("ERREUR: Fichier login_response_pb2.py introuvable.")
+    sys.exit(1)
 
 # ---------------- CONFIGURATION ----------------
 LOG = logging.getLogger("TLS-MOCK")
@@ -18,131 +20,118 @@ CERT_FILE = "server.crt"
 KEY_FILE = "server.key"
 LISTEN_HOST = "0.0.0.0" 
 LISTEN_PORT = 50051
-# -----------------------------------------------
 
-def gRPC_frame(payload):
-    """Encapsule les données Protobuf avec le framing gRPC."""
-    return b"\x00" + struct.pack(">I", len(payload)) + payload
+# La taille totale que le jeu attend (Préambule inclus)
+TARGET_TOTAL_SIZE = 1305
+# ----------------------------------------------
 
-def build_login_response():
-    """Construit une LoginResponse simple et valide (92 bytes, OK)."""
+def build_mega_login_response():
+    """
+    Construit la réponse avec le préambule de longueur (Little Endian).
+    Taille cible : 4 octets (longueur) + X octets (payload) = 1305.
+    """
     resp = login_response_pb2.LoginResponse() 
+    resp.result = login_response_pb2.LoginResponse.Result.OK
+    resp.user_id = "4567890123"
+    resp.username = "Enzo_User"
+    resp.session_id = "TOKEN_FOR_LOGIN" 
+    resp.is_initialized = True 
     
-    resp.result = login_response_pb2.LoginResponse.Result.OK 
-    resp.session_id = "VALID_TOKEN_A7B4C8D2E1F0G3H6I9J4K7L0M3N6P9Q2R5S8T1U4V7W0X3Y6Z9" 
-    resp.username = "Enzo_Authorized_User"
-    resp.user_id = "user_4567"
-    
-    payload = resp.SerializeToString()
-    return gRPC_frame(payload)
+    # Le payload seul doit faire 1301 octets pour que Total soit 1305
+    PAYLOAD_TARGET = TARGET_TOTAL_SIZE - 4
+    p7_padding_size = 900 
 
-# CODE DE TEST CRITIQUE POUR build_nda_protobuf_response
-
-def build_nda_protobuf_response():
-    """Construit la réponse NDA en envoyant le message NDAStatus seul."""
-    
-    nda_status = login_response_pb2.NDAStatus()
-    # 💥 CHANGEMENT : Assigner la valeur à 'nda'
-    nda_status.nda = True 
-    
-    payload = nda_status.SerializeToString()
-    return gRPC_frame(payload)
+    for _ in range(15):
+        resp.large_init_packet = b'X' * p7_padding_size 
+        
+        any_msg = Any()
+        any_msg.Pack(resp)
+        # On force l'URL de type si nécessaire (optionnel)
+        # any_msg.type_url = "type.googleapis.com/LoginResponse"
+        
+        payload = any_msg.SerializeToString()
+        current_len = len(payload)
+        
+        if current_len == PAYLOAD_TARGET:
+            # Framing : Longueur sur 4 octets en Little Endian (ex: 15 05 00 00)
+            header = struct.pack("<I", current_len)
+            LOG.info(f"Payload Protobuf: {current_len} octets. Header: {header.hex()}")
+            return header + payload
+        
+        diff = PAYLOAD_TARGET - current_len
+        p7_padding_size += diff
+        
+    return struct.pack("<I", len(payload)) + payload
 
 def handle_client(connstream, addr):
-    """Gère la connexion client et la séquence NDA/Login."""
-    LOG.info(f"[{addr}] Connexion TLS établie")
+    LOG.info(f"[{addr}] Nouvelle connexion client établie.")
+    
     try:
-        data = connstream.recv(8192) 
+        # 1. Réception de la requête du jeu
+        data = connstream.recv(4096)
         if not data:
-            LOG.info(f"[{addr}] Client a fermé la connexion sans envoyer de données.")
             return
 
-        LOG.info(f"[{addr}] Reçu {len(data)} bytes")
-        
-        # --- Détection et Réponse NDA (1ère étape critique) ---
-        if b"/nda" in data or b"NDA" in data.upper():
-            LOG.info(f"[{addr}] NDARequest détectée → envoi NDA mock PROTOBUF.")
-            
-            resp = build_nda_protobuf_response() 
-            connstream.sendall(resp)
-            LOG.info(f"[{addr}] NDA Response envoyée ({len(resp)} bytes).")
-            
-            time.sleep(0.01) 
-            
-            # Tente de lire à nouveau pour la LoginRequest (bloquant)
-            new_data = connstream.recv(8192) 
-            
-            if new_data:
-                data = new_data
-                LOG.info(f"[{addr}] Nouvelle requête (LoginRequest) reçue après NDA: {len(data)} bytes.")
-            else:
-                 LOG.info(f"[{addr}] Le client a fermé la connexion après NDA.")
-                 return 
+        LOG.info(f"[{addr}] REÇU ({len(data)} octets): {data.hex()[:64]}...")
 
-        # --- Détection et Réponse Login (2ème étape critique) ---
-        if b"type.googleapis.com/LoginRequest" in data:
-            LOG.info(f"[{addr}] LoginRequest détectée → envoi LoginResponse VRAI.")
-            resp = build_login_response() 
-            connstream.sendall(resp)
-            LOG.info(f"[{addr}] LoginResponse envoyée ({len(resp)} bytes).")
+        # 2. Analyse et Réponse
+        if b"LoginRequest" in data:
+            LOG.info(f"[{addr}] LoginRequest détectée. Envoi du paquet de {TARGET_TOTAL_SIZE} octets...")
             
+            full_packet = build_mega_login_response()
+            connstream.sendall(full_packet)
+            
+            LOG.info(f"[{addr}] Réponse envoyée. En attente de la suite (Lobby)...")
+
+            # 3. Observation : On ne coupe pas la connexion
+            connstream.settimeout(30.0) 
+            while True:
+                try:
+                    next_data = connstream.recv(4096)
+                    if not next_data:
+                        LOG.info(f"[{addr}] Le client a fermé la connexion.")
+                        break
+                    LOG.info(f"[{addr}] NOUVELLE REQUÊTE DU JEU : {next_data.hex()}")
+                except socket.timeout:
+                    LOG.info(f"[{addr}] Timeout : Pas de nouvelle requête après 30s.")
+                    break
         else:
-             LOG.info(f"[{addr}] Message inconnu, ou Login non détecté dans le dernier paquet.")
+            LOG.warning(f"[{addr}] Requête inconnue (pas de LoginRequest).")
 
     except Exception as e:
-        LOG.exception(f"[{addr}] Erreur lors du traitement du client: {e}")
+        LOG.error(f"[{addr}] Erreur : {e}")
     finally:
-        try:
-            connstream.shutdown(socket.SHUT_RDWR)
-        except Exception:
-            pass
+        LOG.info(f"[{addr}] Fermeture de la connexion.")
         connstream.close()
-        LOG.info(f"[{addr}] Connexion fermée")
 
-def start_tls_server():
-    """Initialise et démarre le serveur TLS."""
-    
-    # ... (Vérification Protobuf et chargement des certificats - PAS CHANGÉ)
+def run_tls_server():
+    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     try:
-        _ = login_response_pb2.LoginResponse()
-    except AttributeError:
-        LOG.error("ERREUR: Le module 'login_response_pb2' n'a pas pu être initialisé.")
-        LOG.error("Assurez-vous d'avoir exécuté: protoc --python_out=. login_response.proto")
-        sys.exit(1)
-        
-    try:
-        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         context.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
-    except FileNotFoundError:
-        LOG.error(f"ERREUR: Les fichiers TLS ({CERT_FILE} et {KEY_FILE}) sont introuvables. Créez-les avec OpenSSL.")
+    except Exception as e:
+        LOG.error(f"Erreur de chargement des certificats : {e}")
         return
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    # ... (bind et listen)
-    try:
-        sock.bind((LISTEN_HOST, LISTEN_PORT))
-    except OSError as e:
-        LOG.error(f"ERREUR lors du bind sur {LISTEN_HOST}:{LISTEN_PORT}. Le port est-il déjà utilisé ?")
-        return
-        
-    sock.listen(8)
-    LOG.info(f"[TLS-MOCK] Serveur TLS à l'écoute sur {LISTEN_HOST}:{LISTEN_PORT}")
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_sock.bind((LISTEN_HOST, LISTEN_PORT))
+    server_sock.listen(10)
+    
+    LOG.info(f"[TLS-MOCK] Prêt sur le port {LISTEN_PORT}. En attente du jeu...")
 
     try:
         while True:
-            newsock, addr = sock.accept()
+            newsock, addr = server_sock.accept()
             try:
                 connstream = context.wrap_socket(newsock, server_side=True)
-                t = threading.Thread(target=handle_client, args=(connstream, addr), daemon=True)
-                t.start()
-            except ssl.SSLError as se:
-                LOG.error(f"[{addr}] Échec de la poignée de main TLS: {se}")
+                threading.Thread(target=handle_client, args=(connstream, addr), daemon=True).start()
+            except Exception as e:
+                LOG.error(f"Erreur SSL Handshake : {e}")
                 newsock.close()
     except KeyboardInterrupt:
-        LOG.info("Arrêt serveur TLS demandé")
+        LOG.info("Arrêt du serveur.")
     finally:
-        sock.close()
+        server_sock.close()
 
 if __name__ == "__main__":
-    start_tls_server()
+    run_tls_server()
